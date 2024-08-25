@@ -9,9 +9,13 @@ type apiConfig struct {
 	fileServerHits int
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	cfg.fileServerHits++
-	return next
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		cfg.fileServerHits++
+	}
+
 }
 
 func handlerReadiness(w http.ResponseWriter, r *http.Request) {
@@ -28,12 +32,17 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(hits))
 }
 
+func (cfg *apiConfig) handlerResetMetrics(w http.ResponseWriter, r *http.Request) {
+	cfg.fileServerHits = 0
+}
+
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
 	serveMux.Handle("/app/", http.StripPrefix("/app/", apiConf.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serveMux.HandleFunc("/healthz/", handlerReadiness)
 	serveMux.HandleFunc("/metrics/", apiConf.handlerMetrics)
+	serveMux.HandleFunc("/reset/", apiConf.handlerResetMetrics)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
