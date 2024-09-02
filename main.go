@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -55,19 +57,34 @@ func (cfg *apiConfig) handlerAdminMetrics(w http.ResponseWriter, r *http.Request
 }
 
 func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Executing")
+	buf, err_read := ioutil.ReadAll(r.Body)
+	if err_read != nil {
+		log.Printf("Error reading body: %s", err_read)
+	}
+	fmt.Println(string(buf))
 	type parameters struct {
-		body string `json:"body"`
+		Body string `json:"body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		fmt.Println("AAAAAAAH COULDN'T DECORE JSOOOOOOOON")
-
+		log.Printf("Error decoding parameters: %s", err)
 	}
-	if len(params.body) > 140 {
-
+	if len(params.Body) > 140 {
+		type returnVals struct {
+			error string
+		}
+		errMsg := returnVals{"Chirp is too long"}
+		resp, err := json.Marshal(errMsg)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write(resp)
 	}
 }
 
@@ -79,7 +96,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/metrics/", apiConf.handlerMetrics)
 	serveMux.HandleFunc("/api/reset/", apiConf.handlerResetMetrics)
 	serveMux.HandleFunc("/admin/metrics", apiConf.handlerAdminMetrics)
-	serveMux.HandleFunc("api/validate_chirp", handlerValidateChirp)
+	serveMux.HandleFunc("/api/validate_chirp/", handlerValidateChirp)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
