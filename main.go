@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+
+	// "io"
 	"log"
 	"net/http"
 	"strconv"
@@ -56,13 +58,26 @@ func (cfg *apiConfig) handlerAdminMetrics(w http.ResponseWriter, r *http.Request
 	w.Header().Add("Content-Type", "text/html")
 }
 
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Executing")
-	buf, err_read := ioutil.ReadAll(r.Body)
-	if err_read != nil {
-		log.Printf("Error reading body: %s", err_read)
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	w.Write([]byte(msg))
+	return
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error {
+	resp, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return errors.New(fmt.Sprintf("Couldn't marshall json %v", payload))
 	}
-	fmt.Println(string(buf))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(resp)
+	return nil
+}
+
+func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -71,21 +86,28 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		log.Printf("Error decoding parameters: %s", err)
+		err_msg := fmt.Sprintf("Error decoding parameters %v ", err)
+		log.Printf(err_msg)
+		respondWithError(w, 500, err_msg)
+		return
 	}
 	if len(params.Body) > 140 {
-		type returnVals struct {
-			error string
+		type returnServerError struct {
+			Error string `json:"error"`
 		}
-		errMsg := returnVals{"Chirp is too long"}
-		resp, err := json.Marshal(errMsg)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
-		w.Write(resp)
+		errMsg := returnServerError{Error: "Chirp is too long"}
+		respondWithJSON(w, 400, errMsg)
+		return
+		// fmt.Println(errMsg.error)
 	}
+	profanities := []string{"kerfuffle", "sharbert", "fornax"}
+
+	type returnVals struct {
+		Valid bool `json:"valid"`
+	}
+	rVals := returnVals{true}
+	respondWithJSON(w, 200, rVals)
+	return
 }
 
 func main() {
@@ -96,7 +118,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/metrics/", apiConf.handlerMetrics)
 	serveMux.HandleFunc("/api/reset/", apiConf.handlerResetMetrics)
 	serveMux.HandleFunc("/admin/metrics", apiConf.handlerAdminMetrics)
-	serveMux.HandleFunc("/api/validate_chirp/", handlerValidateChirp)
+	serveMux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
