@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	// "io"
+	"internal/database"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type apiConfig struct {
@@ -16,7 +16,6 @@ type apiConfig struct {
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.HandlerFunc {
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 		cfg.fileServerHits++
@@ -86,7 +85,22 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
+func censor_words(source string, wordsToReplace []string) string {
+	replaced := []string{}
+	replacement := "****"
+	words := strings.Split(source, " ")
+	for _, word := range words {
+		if contains(wordsToReplace, strings.ToLower(word)) {
+			replaced = append(replaced, replacement)
+		} else {
+			replaced = append(replaced, word)
+		}
+	}
+	result := strings.Join(replaced, " ")
+	return result
+}
+
+func handlerPOSTChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -110,11 +124,12 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 		// fmt.Println(errMsg.error)
 	}
 	profanities := []string{"kerfuffle", "sharbert", "fornax"}
+	cleaned_body := censor_words(params.Body, profanities)
 
 	type returnVals struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
-	rVals := returnVals{true}
+	rVals := returnVals{CleanedBody: cleaned_body}
 	respondWithJSON(w, 200, rVals)
 	return
 }
@@ -127,7 +142,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/metrics/", apiConf.handlerMetrics)
 	serveMux.HandleFunc("/api/reset/", apiConf.handlerResetMetrics)
 	serveMux.HandleFunc("/admin/metrics", apiConf.handlerAdminMetrics)
-	serveMux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	serveMux.HandleFunc("POST /api/chirps", handlerPOSTChirp)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
