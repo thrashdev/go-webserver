@@ -7,6 +7,8 @@ import (
 	"internal/database"
 	"log"
 	"net/http"
+	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -23,7 +25,7 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.HandlerFunc {
 
 }
 
-func handlerReadiness(w http.ResponseWriter, r *http.Request) {
+func handleReadiness(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	w.Write([]byte("OK"))
 	w.Header().Set("Content-Type", "text-plain")
@@ -31,17 +33,17 @@ func handlerReadiness(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	hits := "Hits: " + strconv.Itoa(cfg.fileServerHits)
 	w.WriteHeader(200)
 	w.Write([]byte(hits))
 }
 
-func (cfg *apiConfig) handlerResetMetrics(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handleResetMetrics(w http.ResponseWriter, r *http.Request) {
 	cfg.fileServerHits = 0
 }
 
-func (cfg *apiConfig) handlerAdminMetrics(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 	template_html := `<html>
 
 <body>
@@ -100,7 +102,7 @@ func censor_words(source string, wordsToReplace []string) string {
 	return result
 }
 
-func handlerPOSTChirp(w http.ResponseWriter, r *http.Request) {
+func handlePOSTChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -126,23 +128,109 @@ func handlerPOSTChirp(w http.ResponseWriter, r *http.Request) {
 	profanities := []string{"kerfuffle", "sharbert", "fornax"}
 	cleaned_body := censor_words(params.Body, profanities)
 
-	type returnVals struct {
-		CleanedBody string `json:"cleaned_body"`
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		log.Fatal(err)
 	}
-	rVals := returnVals{CleanedBody: cleaned_body}
-	respondWithJSON(w, 200, rVals)
+	chirp, err := db.CreateChirp(cleaned_body)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	respondWithJSON(w, 201, chirp)
 	return
+}
+
+func handleGETChirps(w http.ResponseWriter, r *http.Request) {
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	chirps, err := db.GetChirps()
+	if err != nil {
+		log.Fatal(err)
+	}
+	sort.Slice(chirps, func(i, j int) bool {
+		return chirps[i].Id < chirps[j].Id
+	})
+
+	jsonResp, err := json.Marshal(chirps)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+
+	w.WriteHeader(200)
+	w.Write(jsonResp)
+
+}
+
+func handleGETChirpByID(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	chirp, err := db.GetChirpByID(id)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	jsonResp, err := json.Marshal(chirp)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	w.WriteHeader(200)
+	w.Write(jsonResp)
+
+}
+
+func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		err_msg := fmt.Sprintf("Error decoding parameters %v ", err)
+		log.Printf(err_msg)
+		respondWithError(w, 500, err_msg)
+		return
+	}
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	user, err := db.CreateUser(params.Email)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	err = respondWithJSON(w, 201, user)
+
 }
 
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
 	serveMux.Handle("/app/", http.StripPrefix("/app/", apiConf.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
-	serveMux.HandleFunc("GET /api/healthz/", handlerReadiness)
-	serveMux.HandleFunc("GET /api/metrics/", apiConf.handlerMetrics)
-	serveMux.HandleFunc("/api/reset/", apiConf.handlerResetMetrics)
-	serveMux.HandleFunc("/admin/metrics", apiConf.handlerAdminMetrics)
-	serveMux.HandleFunc("POST /api/chirps", handlerPOSTChirp)
+	serveMux.HandleFunc("GET /api/healthz/", handleReadiness)
+	serveMux.HandleFunc("GET /api/metrics/", apiConf.handleMetrics)
+	serveMux.HandleFunc("/api/reset/", apiConf.handleResetMetrics)
+	serveMux.HandleFunc("/admin/metrics", apiConf.handleAdminMetrics)
+	serveMux.HandleFunc("POST /api/chirps", handlePOSTChirp)
+	serveMux.HandleFunc("GET /api/chirps", handleGETChirps)
+	serveMux.HandleFunc("GET /api/chirps/{id}", handleGETChirpByID)
+	serveMux.HandleFunc("POST /api/users", handlePOSTUser)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
