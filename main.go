@@ -195,6 +195,7 @@ func handleGETChirpByID(w http.ResponseWriter, r *http.Request) {
 func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
+		// Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}

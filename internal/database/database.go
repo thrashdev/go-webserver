@@ -31,7 +31,7 @@ type DBStructure struct {
 }
 
 func NewDB(path string) (*DB, error) {
-	defaultStructure, err := json.Marshal(DBStructure{})
+	defaultStructure, err := json.Marshal(DBStructure{Chirps: make(map[int]Chirp), Users: make(map[int]User)})
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal()
