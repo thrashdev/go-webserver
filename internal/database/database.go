@@ -3,11 +3,12 @@ package database
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"runtime/debug"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type DB struct {
@@ -21,8 +22,9 @@ type Chirp struct {
 }
 
 type User struct {
-	Id    int    `json:"id"`
-	Email string `json:"email"`
+	Id       int    `json:"id"`
+	Email    string `json:"email"`
+	Password []byte
 }
 
 type DBStructure struct {
@@ -36,7 +38,6 @@ func NewDB(path string) (*DB, error) {
 		debug.PrintStack()
 		log.Fatal()
 	}
-	fmt.Println("Default structure: ", string(defaultStructure))
 	_, err = os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -157,18 +158,66 @@ func (db *DB) GetChirpByID(chirpID int) (Chirp, error) {
 
 }
 
-func (db *DB) CreateUser(email string) (User, error) {
+func (db *DB) CreateUser(email string, password string) (User, error) {
 	dbStructure, err := db.loadDB()
-	fmt.Println(dbStructure)
 	if err != nil {
 		log.Fatal(err)
 	}
+	_, err = db.GetUserByEmail(email)
+	if err == nil {
+		return User{}, errors.New("User with this email already exists")
+	}
 	id := dbStructure.getMaxUserID() + 1
-	user := User{Id: id, Email: email}
+	hashedPass, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal()
+	}
+	user := User{Id: id, Email: email, Password: hashedPass}
 	dbStructure.Users[id] = user
 	err = db.writeDB(dbStructure)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return user, nil
+}
+
+func (db *DB) GetUsers() ([]User, error) {
+	users := []User{}
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, v := range dbStructure.Users {
+		users = append(users, v)
+	}
+	return users, nil
+}
+
+func (db *DB) GetUserByID(userID int) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	user, ok := dbStructure.Users[userID]
+	if ok {
+		return user, nil
+	}
+	return User{}, errors.New("User not found")
+
+}
+
+func (db *DB) GetUserByEmail(email string) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	for _, v := range dbStructure.Users {
+		if v.Email == email {
+			return v, nil
+		}
+	}
+	return User{}, errors.New("User not found")
 }

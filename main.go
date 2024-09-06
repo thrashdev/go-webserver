@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type apiConfig struct {
@@ -194,8 +196,8 @@ func handleGETChirpByID(w http.ResponseWriter, r *http.Request) {
 
 func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
-		// Password string `json:"password"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -211,12 +213,63 @@ func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 		debug.PrintStack()
 		log.Fatal(err)
 	}
-	user, err := db.CreateUser(params.Email)
+	user, err := db.CreateUser(params.Email, params.Password)
+	if err != nil {
+		debug.PrintStack()
+		w.WriteHeader(400)
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(err.Error()))
+		return
+	}
+	type responseJSON struct {
+		Id    int    `json:"id"`
+		Email string `json:"email"`
+	}
+	respJSON := responseJSON{Id: user.Id, Email: user.Email}
+	err = respondWithJSON(w, 201, respJSON)
+
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		err_msg := fmt.Sprintf("Error decoding parameters %v ", err)
+		log.Printf(err_msg)
+		respondWithError(w, 500, err_msg)
+		return
+	}
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal()
+	}
+	user, err := db.GetUserByEmail(params.Email)
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
 	}
-	err = respondWithJSON(w, 201, user)
+	err = bcrypt.CompareHashAndPassword(user.Password, []byte(params.Password))
+	if err != nil {
+		w.WriteHeader(401)
+		return
+	}
+	type responseJSON struct {
+		Id    int    `json:"id"`
+		Email string `json:"email"`
+	}
+	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email})
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	w.WriteHeader(200)
+	w.Write(respJSON)
 
 }
 
@@ -232,6 +285,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps", handleGETChirps)
 	serveMux.HandleFunc("GET /api/chirps/{id}", handleGETChirpByID)
 	serveMux.HandleFunc("POST /api/users", handlePOSTUser)
+	serveMux.HandleFunc("POST /api/login", handleLogin)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
