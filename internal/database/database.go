@@ -3,6 +3,7 @@ package database
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"runtime/debug"
@@ -220,4 +221,15 @@ func (db *DB) GetUserByEmail(email string) (User, error) {
 		}
 	}
 	return User{}, errors.New("User not found")
+}
+
+func (db *DB) UpdateUser(user User) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		fmt.Println(err)
+		return User{}, errors.New("Couldn't load db")
+	}
+	dbStructure.Users[user.Id] = user
+	return dbStructure.Users[user.Id], nil
+
 }

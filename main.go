@@ -7,11 +7,15 @@ import (
 	"internal/database"
 	"log"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -232,8 +236,9 @@ func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Password       string `json:"password"`
+		ExpirationTime string `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -259,11 +264,26 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 		return
 	}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	expiresInSeconds, err := strconv.Atoi(params.ExpirationTime)
+	if err != nil {
+		expiresInSeconds = 86400 //24hours
+	}
+	expirationTime := time.Now().Add(time.Second * time.Duration(expiresInSeconds))
+	claims := jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now().UTC()), Subject: string(user.Id), ExpiresAt: jwt.NewNumericDate(expirationTime)}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	type responseJSON struct {
 		Id    int    `json:"id"`
 		Email string `json:"email"`
+		Token string `json:"token"`
 	}
-	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email})
+	// fmt.Println(jwtSecret)
+	tokenStringified, err := token.SignedString([]byte(jwtSecret))
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email, Token: tokenStringified})
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
@@ -273,9 +293,81 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func handlePUTUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		err_msg := fmt.Sprintf("Error decoding parameters %v ", err)
+		log.Printf(err_msg)
+		respondWithError(w, 500, err_msg)
+		return
+	}
+	tokenHeader := r.Header.Get("Authorization")
+	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
+	claims := jwt.RegisteredClaims{}
+	tokenObj, err := jwt.ParseWithClaims(tokenString, &claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	stringUserID, err := tokenObj.Claims.GetSubject()
+	fmt.Println(stringUserID)
+	fmt.Println(tokenObj.Claims)
+	fmt.Println("Subj: ")
+	fmt.Println([]byte(stringUserID))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	userID, err := strconv.Atoi(stringUserID)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	dbUser, err := db.GetUserByID(int(userID))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	user := database.User{Id: dbUser.Id, Email: params.Email, Password: []byte(params.Password)}
+	newUser, err := db.UpdateUser(user)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	type responseJSON struct {
+		Id    int    `json:"id"`
+		Email string `json:"email"`
+	}
+	respJSON := responseJSON{Id: newUser.Id, Email: newUser.Email}
+	respondWithJSON(w, 200, respJSON)
+
+	// fmt.Println(token)
+
+}
+
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 	serveMux.Handle("/app/", http.StripPrefix("/app/", apiConf.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	serveMux.HandleFunc("GET /api/healthz/", handleReadiness)
 	serveMux.HandleFunc("GET /api/metrics/", apiConf.handleMetrics)
@@ -286,6 +378,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps/{id}", handleGETChirpByID)
 	serveMux.HandleFunc("POST /api/users", handlePOSTUser)
 	serveMux.HandleFunc("POST /api/login", handleLogin)
+	serveMux.HandleFunc("PUT /api/users", handlePUTUser)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
