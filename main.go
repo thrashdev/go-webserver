@@ -238,7 +238,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email          string `json:"email"`
 		Password       string `json:"password"`
-		ExpirationTime string `json:"expires_in_seconds"`
+		ExpirationTime int    `json:"expires_in_seconds,omitempty"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -265,9 +265,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jwtSecret := os.Getenv("JWT_SECRET")
-	expiresInSeconds, err := strconv.Atoi(params.ExpirationTime)
-	if err != nil {
-		expiresInSeconds = 86400 //24hours
+	expiresInSeconds := params.ExpirationTime
+	if expiresInSeconds == 0 || expiresInSeconds > 86400 {
+		expiresInSeconds = 86400 //24hrs
 	}
 	expirationTime := time.Now().Add(time.Second * time.Duration(expiresInSeconds))
 	claims := jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now().UTC()), Subject: string(user.Id), ExpiresAt: jwt.NewNumericDate(expirationTime)}
@@ -307,6 +307,7 @@ func handlePUTUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 500, err_msg)
 		return
 	}
+	fmt.Println(params)
 	tokenHeader := r.Header.Get("Authorization")
 	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
 	claims := jwt.RegisteredClaims{}
@@ -318,22 +319,15 @@ func handlePUTUser(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		fmt.Println(err)
+		w.WriteHeader(401)
 		return
 	}
 	stringUserID, err := tokenObj.Claims.GetSubject()
-	fmt.Println(stringUserID)
-	fmt.Println(tokenObj.Claims)
-	fmt.Println("Subj: ")
-	fmt.Println([]byte(stringUserID))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	userID, err := strconv.Atoi(stringUserID)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	userID := int([]byte(stringUserID)[0])
 	db, err := database.NewDB("database.json")
 	if err != nil {
 		fmt.Println(err)

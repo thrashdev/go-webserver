@@ -229,7 +229,15 @@ func (db *DB) UpdateUser(user User) (User, error) {
 		fmt.Println(err)
 		return User{}, errors.New("Couldn't load db")
 	}
+	hashedPass, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal()
+	}
+	user.Password = hashedPass
 	dbStructure.Users[user.Id] = user
-	return dbStructure.Users[user.Id], nil
+	newUser := dbStructure.Users[user.Id]
+	db.writeDB(dbStructure)
+	return newUser, nil
 
 }
