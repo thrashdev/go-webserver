@@ -99,6 +99,37 @@ func newAccessToken(u database.User) (token string) {
 	return accessToken
 }
 
+func authenticateJWT(r *http.Request) (*jwt.Token, error) {
+	tokenHeader := r.Header.Get("Authorization")
+	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
+	claims := jwt.RegisteredClaims{}
+	tokenObj, err := jwt.ParseWithClaims(tokenString, &claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil {
+		return &jwt.Token{}, err
+	}
+	return tokenObj, nil
+}
+
+func getUserIdFromJwtToken(token *jwt.Token) (userID int, err error) {
+	fmt.Println("I get here 1")
+	fmt.Println(token.Claims)
+	idString, err := token.Claims.GetSubject()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// var userID int
+	fmt.Println("Subj bytes:", []byte(idString))
+	idBytes := []byte(idString)
+	userID = int(idBytes[0])
+	return userID, nil
+
+}
+
 func contains(slice []string, item string) bool {
 	for _, a := range slice {
 		if a == item {
@@ -153,7 +184,22 @@ func handlePOSTChirp(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	chirp, err := db.CreateChirp(cleaned_body)
+	token, err := authenticateJWT(r)
+	if err != nil {
+		log.Println(err)
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(401)
+		return
+	}
+	stringUserID, err := token.Claims.GetSubject()
+	if err != nil {
+		log.Println(err)
+		w.Write([]byte(err.Error()))
+		w.WriteHeader(401)
+		return
+	}
+	userID := int([]byte(stringUserID)[0])
+	chirp, err := db.CreateChirp(cleaned_body, userID)
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
@@ -412,6 +458,68 @@ func handlePOSTRefresh(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func handlePOSTRevoke(w http.ResponseWriter, r *http.Request) {
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	tokenHeader := r.Header.Get("Authorization")
+	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
+	token, err := db.GetRefreshToken(tokenString)
+	if err != nil {
+		respondWithError(w, 401, "No token in db")
+		return
+	}
+	now := time.Now()
+	//if more than 60 days then it's expired
+	fmt.Println("Time-diff: ", now.Sub(token.CreatedAt))
+	if now.Sub(token.CreatedAt) > time.Duration(1)*time.Hour*24*60 {
+		respondWithError(w, 401, "Token expired")
+		return
+	}
+	db.DeleteRefreshToken(tokenString)
+	w.WriteHeader(204)
+	return
+
+}
+
+func handleDELETEChirpByID(w http.ResponseWriter, r *http.Request) {
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		log.Fatal()
+	}
+	token, err := authenticateJWT(r)
+	if err != nil {
+		respondWithError(w, 403, err.Error())
+		return
+	}
+	fmt.Println(token)
+	userID, err := getUserIdFromJwtToken(token)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(userID)
+	chirpID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	chirp, err := db.GetChirpByID(chirpID)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if chirp.AuthorID != userID {
+		w.WriteHeader(403)
+		return
+	}
+	err = db.DeleteChirpByID(chirpID)
+	w.WriteHeader(204)
+	return
+
+}
+
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
@@ -431,6 +539,8 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", handleLogin)
 	serveMux.HandleFunc("PUT /api/users", handlePUTUser)
 	serveMux.HandleFunc("POST /api/refresh", handlePOSTRefresh)
+	serveMux.HandleFunc("POST /api/revoke", handlePOSTRevoke)
+	serveMux.HandleFunc("DELETE /api/chirps/{id}", handleDELETEChirpByID)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }

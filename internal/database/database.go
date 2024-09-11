@@ -19,8 +19,9 @@ type DB struct {
 }
 
 type Chirp struct {
-	Id   int    `json:"id"`
-	Body string `json:"body"`
+	Id       int    `json:"id"`
+	Body     string `json:"body"`
+	AuthorID int    `json:"author_id"`
 }
 
 type User struct {
@@ -125,13 +126,13 @@ func (dbStructure *DBStructure) getMaxUserID() int {
 	return maxID
 }
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string, userID int) (Chirp, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {
 		log.Fatal(err)
 	}
 	id := dbStructure.getMaxChirpID() + 1
-	chirp := Chirp{Id: id, Body: body}
+	chirp := Chirp{Id: id, Body: body, AuthorID: userID}
 	dbStructure.Chirps[id] = chirp
 	err = db.writeDB(dbStructure)
 	if err != nil {
@@ -165,6 +166,21 @@ func (db *DB) GetChirpByID(chirpID int) (Chirp, error) {
 	}
 	return Chirp{}, errors.New("Chirp not found")
 
+}
+
+func (db *DB) DeleteChirpByID(chirpID int) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	delete(dbStructure.Chirps, chirpID)
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	return nil
 }
 
 func (db *DB) CreateUser(email string, password string) (User, error) {
@@ -269,5 +285,16 @@ func (db *DB) GetRefreshToken(token string) (RefreshToken, error) {
 		return rToken, nil
 	}
 	return RefreshToken{}, errors.New("Refresh token not found")
+
+}
+
+func (db *DB) DeleteRefreshToken(token string) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		log.Fatal("Couldn't load db")
+	}
+	delete(dbStructure.RefreshTokens, token)
+	db.writeDB(dbStructure)
+	return nil
 
 }
