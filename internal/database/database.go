@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -29,12 +30,19 @@ type User struct {
 }
 
 type DBStructure struct {
-	Chirps map[int]Chirp `json:"chirps"`
-	Users  map[int]User  `json:"users"`
+	Chirps        map[int]Chirp           `json:"chirps"`
+	Users         map[int]User            `json:"users"`
+	RefreshTokens map[string]RefreshToken `json:"refresh_tokens"`
+}
+
+type RefreshToken struct {
+	UserID    int       `json:"user_id"`
+	Token     string    `json"refresh_token:"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func NewDB(path string) (*DB, error) {
-	defaultStructure, err := json.Marshal(DBStructure{Chirps: make(map[int]Chirp), Users: make(map[int]User)})
+	defaultStructure, err := json.Marshal(DBStructure{Chirps: make(map[int]Chirp), Users: make(map[int]User), RefreshTokens: make(map[string]RefreshToken)})
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal()
@@ -239,5 +247,27 @@ func (db *DB) UpdateUser(user User) (User, error) {
 	newUser := dbStructure.Users[user.Id]
 	db.writeDB(dbStructure)
 	return newUser, nil
+}
+
+func (db *DB) CreateRefreshToken(rToken RefreshToken) (RefreshToken, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		fmt.Println(err)
+		return RefreshToken{}, errors.New("Couldn't load db")
+	}
+	dbStructure.RefreshTokens[rToken.Token] = rToken
+	db.writeDB(dbStructure)
+	return rToken, nil
+}
+
+func (db *DB) GetRefreshToken(token string) (RefreshToken, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		log.Fatal("Couldn't load db")
+	}
+	if rToken, ok := dbStructure.RefreshTokens[token]; ok {
+		return rToken, nil
+	}
+	return RefreshToken{}, errors.New("Refresh token not found")
 
 }

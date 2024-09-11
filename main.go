@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,6 +84,19 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) error
 	w.WriteHeader(code)
 	w.Write(resp)
 	return nil
+}
+
+func newAccessToken(u database.User) (token string) {
+	jwtSecret := os.Getenv("JWT_SECRET")
+	expirationTime := time.Now().Add(time.Hour * time.Duration(1))
+	claims := jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now().UTC()), Subject: string(u.Id), ExpiresAt: jwt.NewNumericDate(expirationTime)}
+	tokenObj := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	accessToken, err := tokenObj.SignedString([]byte(jwtSecret))
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	return accessToken
 }
 
 func contains(slice []string, item string) bool {
@@ -236,9 +251,9 @@ func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email          string `json:"email"`
-		Password       string `json:"password"`
-		ExpirationTime int    `json:"expires_in_seconds,omitempty"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		// ExpirationTime int    `json:"expires_in_seconds,omitempty"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -256,34 +271,39 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := db.GetUserByEmail(params.Email)
 	if err != nil {
-		debug.PrintStack()
-		log.Fatal(err)
+		// log.Println(err)
+		w.WriteHeader(400)
+		w.Header().Set("Content-Type", "text-plain")
+		w.Header().Set("charset", "utf-8")
+		w.Write([]byte(err.Error() + "\n"))
+		return
 	}
 	err = bcrypt.CompareHashAndPassword(user.Password, []byte(params.Password))
 	if err != nil {
 		w.WriteHeader(401)
 		return
 	}
-	jwtSecret := os.Getenv("JWT_SECRET")
-	expiresInSeconds := params.ExpirationTime
-	if expiresInSeconds == 0 || expiresInSeconds > 86400 {
-		expiresInSeconds = 86400 //24hrs
-	}
-	expirationTime := time.Now().Add(time.Second * time.Duration(expiresInSeconds))
-	claims := jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now().UTC()), Subject: string(user.Id), ExpiresAt: jwt.NewNumericDate(expirationTime)}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	type responseJSON struct {
-		Id    int    `json:"id"`
-		Email string `json:"email"`
-		Token string `json:"token"`
-	}
-	// fmt.Println(jwtSecret)
-	tokenStringified, err := token.SignedString([]byte(jwtSecret))
+	accessToken := newAccessToken(user)
+	refreshTokenSource := make([]byte, 10)
+	_, err = rand.Read(refreshTokenSource)
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
 	}
-	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email, Token: tokenStringified})
+	refreshTokenString := hex.EncodeToString(refreshTokenSource)
+	rToken := database.RefreshToken{UserID: user.Id, Token: refreshTokenString, CreatedAt: time.Now()}
+	db.CreateRefreshToken(rToken)
+	type responseJSON struct {
+		Id           int    `json:"id"`
+		Email        string `json:"email"`
+		AccessToken  string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email, AccessToken: accessToken, RefreshToken: refreshTokenString})
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
@@ -355,6 +375,43 @@ func handlePUTUser(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func handlePOSTRefresh(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Executing refresh")
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		debug.PrintStack()
+		log.Fatal(err)
+	}
+	tokenHeader := r.Header.Get("Authorization")
+	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
+	token, err := db.GetRefreshToken(tokenString)
+	if err != nil {
+		w.WriteHeader(401)
+		return
+	}
+	now := time.Now()
+	//if more than 60 days then it's expired
+	fmt.Println("Time-diff: ", now.Sub(token.CreatedAt))
+	if now.Sub(token.CreatedAt) > time.Duration(1)*time.Hour*24*60 {
+		w.WriteHeader(401)
+		return
+	}
+	userID := token.UserID
+	user, err := db.GetUserByID(userID)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+
+	accessToken := newAccessToken(user)
+	type responseJSON struct {
+		Token string `json:"token"`
+	}
+	respJSON := responseJSON{Token: accessToken}
+	respondWithJSON(w, 200, respJSON)
+
+}
+
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
@@ -373,6 +430,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/users", handlePOSTUser)
 	serveMux.HandleFunc("POST /api/login", handleLogin)
 	serveMux.HandleFunc("PUT /api/users", handlePUTUser)
+	serveMux.HandleFunc("POST /api/refresh", handlePOSTRefresh)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }
