@@ -116,14 +116,11 @@ func authenticateJWT(r *http.Request) (*jwt.Token, error) {
 }
 
 func getUserIdFromJwtToken(token *jwt.Token) (userID int, err error) {
-	fmt.Println("I get here 1")
-	fmt.Println(token.Claims)
 	idString, err := token.Claims.GetSubject()
 	if err != nil {
 		log.Fatal(err)
 	}
 	// var userID int
-	fmt.Println("Subj bytes:", []byte(idString))
 	idBytes := []byte(idString)
 	userID = int(idBytes[0])
 	return userID, nil
@@ -175,7 +172,6 @@ func handlePOSTChirp(w http.ResponseWriter, r *http.Request) {
 		errMsg := returnServerError{Error: "Chirp is too long"}
 		respondWithJSON(w, 400, errMsg)
 		return
-		// fmt.Println(errMsg.error)
 	}
 	profanities := []string{"kerfuffle", "sharbert", "fornax"}
 	cleaned_body := censor_words(params.Body, profanities)
@@ -287,10 +283,10 @@ func handlePOSTUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type responseJSON struct {
-		Id    int    `json:"id"`
-		Email string `json:"email"`
+		database.UserDTO
 	}
-	respJSON := responseJSON{Id: user.Id, Email: user.Email}
+	userDto := database.UserDTO{Id: user.Id, Email: user.Email, IsChirpyRed: user.IsChirpyRed}
+	respJSON := responseJSON{UserDTO: userDto}
 	err = respondWithJSON(w, 201, respJSON)
 
 }
@@ -327,6 +323,15 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	err = bcrypt.CompareHashAndPassword(user.Password, []byte(params.Password))
 	if err != nil {
 		w.WriteHeader(401)
+		hashedPass, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
+		if err != nil {
+			debug.PrintStack()
+			log.Fatal()
+		}
+		log.Println("Password validation error", err)
+		log.Println("Request password: ", params.Password)
+		log.Println("User password: ", user.Password)
+		log.Println("Hashed request password: ", hashedPass)
 		return
 	}
 	accessToken := newAccessToken(user)
@@ -340,8 +345,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	rToken := database.RefreshToken{UserID: user.Id, Token: refreshTokenString, CreatedAt: time.Now()}
 	db.CreateRefreshToken(rToken)
 	type responseJSON struct {
-		Id           int    `json:"id"`
-		Email        string `json:"email"`
+		database.UserDTO
 		AccessToken  string `json:"token"`
 		RefreshToken string `json:"refresh_token"`
 	}
@@ -349,7 +353,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		debug.PrintStack()
 		log.Fatal(err)
 	}
-	respJSON, err := json.Marshal(responseJSON{Id: user.Id, Email: user.Email, AccessToken: accessToken, RefreshToken: refreshTokenString})
+	userDto := database.UserDTO{Id: user.Id, Email: user.Email, IsChirpyRed: user.IsChirpyRed}
+	respJSON, err := json.Marshal(responseJSON{UserDTO: userDto, AccessToken: accessToken, RefreshToken: refreshTokenString})
 	if err != nil {
 		debug.PrintStack()
 		log.Fatal(err)
@@ -373,7 +378,6 @@ func handlePUTUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 500, err_msg)
 		return
 	}
-	fmt.Println(params)
 	tokenHeader := r.Header.Get("Authorization")
 	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
 	claims := jwt.RegisteredClaims{}
@@ -520,6 +524,58 @@ func handleDELETEChirpByID(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func handlePolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type requestData struct {
+		UserID int `json:"user_id"`
+	}
+	type parameters struct {
+		Event string      `json:"event"`
+		Data  requestData `json:"data"`
+	}
+	apiKeyHeader := r.Header.Get("Authorization")
+	if !strings.Contains(apiKeyHeader, "ApiKey") {
+		w.WriteHeader(401)
+		return
+	}
+	apiKeyRequest := strings.Replace(apiKeyHeader, "ApiKey ", "", 1)
+	apiKeySecret := os.Getenv("POLKA_API_KEY")
+	if apiKeyRequest != apiKeySecret {
+		w.WriteHeader(401)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		err_msg := fmt.Sprintf("Error decoding parameters %v ", err)
+		log.Printf(err_msg)
+		respondWithError(w, 500, err_msg)
+		return
+	}
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+	userID := params.Data.UserID
+	db, err := database.NewDB("database.json")
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	user, err := db.GetUserByID(userID)
+	if err != nil {
+		w.WriteHeader(404)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	user.IsChirpyRed = true
+	db.UpdateUser(user)
+	w.WriteHeader(204)
+	return
+}
+
 func main() {
 	serveMux := http.NewServeMux()
 	apiConf := apiConfig{}
@@ -541,6 +597,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/refresh", handlePOSTRefresh)
 	serveMux.HandleFunc("POST /api/revoke", handlePOSTRevoke)
 	serveMux.HandleFunc("DELETE /api/chirps/{id}", handleDELETEChirpByID)
+	serveMux.HandleFunc("POST /api/polka/webhooks", handlePolkaWebhook)
 	server := http.Server{Handler: serveMux, Addr: ":8080"}
 	server.ListenAndServe()
 }

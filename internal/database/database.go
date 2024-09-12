@@ -25,9 +25,16 @@ type Chirp struct {
 }
 
 type User struct {
-	Id       int    `json:"id"`
-	Email    string `json:"email"`
-	Password []byte
+	Id          int    `json:"id"`
+	Email       string `json:"email"`
+	Password    []byte
+	IsChirpyRed bool `json:"is_chirpy_red"`
+}
+
+type UserDTO struct {
+	Id          int    `json:"id"`
+	Email       string `json:"email"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
 }
 
 type DBStructure struct {
@@ -253,12 +260,6 @@ func (db *DB) UpdateUser(user User) (User, error) {
 		fmt.Println(err)
 		return User{}, errors.New("Couldn't load db")
 	}
-	hashedPass, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		debug.PrintStack()
-		log.Fatal()
-	}
-	user.Password = hashedPass
 	dbStructure.Users[user.Id] = user
 	newUser := dbStructure.Users[user.Id]
 	db.writeDB(dbStructure)
